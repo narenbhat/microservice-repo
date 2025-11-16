@@ -15,4 +15,7 @@ public class Room {
     private String name;
     private Set<String> participants = new HashSet<>();
     private long createdAt;
+    private int maxParticipants;
+    private boolean isLocked;
+    private String hostId;
 }

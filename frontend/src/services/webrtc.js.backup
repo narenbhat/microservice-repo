@@ -470,15 +470,10 @@ class WebRTCService {
     if (peerConnection) {
       peerConnection.close();
       this.peerConnections.delete(peerId);
-      this.retryAttempts.delete(peerId);
-      this.clearConnectionTimer(peerId);
-      this.stopQualityMonitoring(peerId);
 
       if (this.onRemoteStreamRemovedCallback) {
         this.onRemoteStreamRemovedCallback(peerId);
       }
-
-      this.logInfo(`Peer connection removed for ${peerId}`);
     }
   }
 
@@ -487,7 +482,6 @@ class WebRTCService {
       this.localStream.getAudioTracks().forEach(track => {
         track.enabled = enabled;
       });
-      this.logInfo(`Audio ${enabled ? 'enabled' : 'disabled'}`);
     }
   }
 
@@ -496,257 +490,29 @@ class WebRTCService {
       this.localStream.getVideoTracks().forEach(track => {
         track.enabled = enabled;
       });
-      this.logInfo(`Video ${enabled ? 'enabled' : 'disabled'}`);
-    }
-  }
-
-  // Network quality monitoring
-  startQualityMonitoring(peerId, sender) {
-    const intervalId = setInterval(async () => {
-      try {
-        const stats = await sender.getStats();
-        let quality = { peerId, bitrate: 0, packetLoss: 0, jitter: 0, rtt: 0 };
-
-        stats.forEach(report => {
-          if (report.type === 'outbound-rtp' && report.mediaType === 'video') {
-            // Calculate bitrate
-            if (report.bytesSent !== undefined) {
-              const bitrate = (report.bytesSent * 8) / report.timestamp;
-              quality.bitrate = Math.round(bitrate / 1000); // Convert to kbps
-            }
-
-            // Get packet loss
-            if (report.packetsLost !== undefined && report.packetsSent !== undefined) {
-              quality.packetLoss = (report.packetsLost / (report.packetsSent + report.packetsLost)) * 100;
-            }
-          }
-
-          if (report.type === 'remote-inbound-rtp') {
-            // Get jitter and RTT
-            quality.jitter = report.jitter || 0;
-            quality.rtt = report.roundTripTime || 0;
-          }
-        });
-
-        // Notify quality change
-        if (this.onNetworkQualityChangeCallback) {
-          this.onNetworkQualityChangeCallback(quality);
-        }
-
-        // Auto-adjust quality based on network conditions
-        this.adjustQualityBasedOnStats(peerId, quality, sender);
-      } catch (error) {
-        this.logError(`Error monitoring quality for ${peerId}`, error);
-      }
-    }, 5000); // Check every 5 seconds
-
-    this.qualityMonitors.set(peerId, intervalId);
-  }
-
-  stopQualityMonitoring(peerId) {
-    const intervalId = this.qualityMonitors.get(peerId);
-    if (intervalId) {
-      clearInterval(intervalId);
-      this.qualityMonitors.delete(peerId);
-    }
-  }
-
-  async adjustQualityBasedOnStats(peerId, quality, sender) {
-    // Auto-adjust bitrate based on packet loss and RTT
-    if (quality.packetLoss > 5 || quality.rtt > 300) {
-      // High packet loss or latency - reduce quality
-      const parameters = sender.getParameters();
-      if (parameters.encodings && parameters.encodings[0]) {
-        parameters.encodings[0].maxBitrate = 500000; // 500 kbps
-        await sender.setParameters(parameters);
-        this.logWarning(`Reduced bitrate for ${peerId} due to poor network quality`);
-      }
-    } else if (quality.packetLoss < 1 && quality.rtt < 100) {
-      // Good conditions - increase quality
-      const parameters = sender.getParameters();
-      if (parameters.encodings && parameters.encodings[0]) {
-        parameters.encodings[0].maxBitrate = 2500000; // 2.5 Mbps
-        await sender.setParameters(parameters);
-        this.logInfo(`Increased bitrate for ${peerId} due to good network quality`);
-      }
-    }
-  }
-
-  // Get connection statistics
-  async getConnectionStats(peerId) {
-    const peerConnection = this.peerConnections.get(peerId);
-    if (!peerConnection) return null;
-
-    try {
-      const stats = await peerConnection.getStats();
-      const statsReport = {
-        peerId,
-        connection: peerConnection.connectionState,
-        iceConnection: peerConnection.iceConnectionState,
-        signaling: peerConnection.signalingState,
-        candidates: [],
-        audio: {},
-        video: {}
-      };
-
-      stats.forEach(report => {
-        if (report.type === 'candidate-pair' && report.state === 'succeeded') {
-          statsReport.candidates.push({
-            local: report.localCandidateId,
-            remote: report.remoteCandidateId,
-            bytesReceived: report.bytesReceived,
-            bytesSent: report.bytesSent
-          });
-        }
-
-        if (report.type === 'inbound-rtp') {
-          const mediaStats = {
-            packetsReceived: report.packetsReceived,
-            packetsLost: report.packetsLost,
-            jitter: report.jitter,
-            bytesReceived: report.bytesReceived
-          };
-
-          if (report.mediaType === 'audio') {
-            statsReport.audio = mediaStats;
-          } else if (report.mediaType === 'video') {
-            statsReport.video = { ...mediaStats, framesDecoded: report.framesDecoded };
-          }
-        }
-      });
-
-      return statsReport;
-    } catch (error) {
-      this.logError(`Error getting stats for ${peerId}`, error);
-      return null;
-    }
-  }
-
-  // Logging methods
-  logInfo(message, data = null) {
-    const timestamp = new Date().toISOString();
-    console.log(`[WebRTC INFO ${timestamp}]`, message, data || '');
-    // In production, send to logging service
-    this.sendToLoggingService('info', message, data);
-  }
-
-  logWarning(message, data = null) {
-    const timestamp = new Date().toISOString();
-    console.warn(`[WebRTC WARNING ${timestamp}]`, message, data || '');
-    this.sendToLoggingService('warning', message, data);
-  }
-
-  logError(message, error = null) {
-    const timestamp = new Date().toISOString();
-    console.error(`[WebRTC ERROR ${timestamp}]`, message, error || '');
-    this.sendToLoggingService('error', message, error);
-  }
-
-  sendToLoggingService(level, message, data) {
-    // In production, implement actual logging service integration
-    // Examples: Sentry, LogRocket, Datadog, etc.
-    if (process.env.NODE_ENV === 'production') {
-      // Send to your logging service
-      // Example: Sentry.captureMessage(message, { level, extra: data });
     }
   }
 
   cleanup() {
-    this.logInfo('Cleaning up WebRTC service');
-
-    // Stop all quality monitors
-    this.qualityMonitors.forEach((intervalId) => {
-      clearInterval(intervalId);
-    });
-    this.qualityMonitors.clear();
-
-    // Clear all timers
-    this.connectionTimers.forEach((timer) => {
-      clearTimeout(timer);
-    });
-    this.connectionTimers.clear();
-
     // Close all peer connections
     this.peerConnections.forEach((pc, peerId) => {
       pc.close();
     });
     this.peerConnections.clear();
-    this.retryAttempts.clear();
 
     // Stop local stream
     if (this.localStream) {
       this.localStream.getTracks().forEach(track => track.stop());
       this.localStream = null;
     }
-
-    // Stop screen stream
-    if (this.screenStream) {
-      this.screenStream.getTracks().forEach(track => track.stop());
-      this.screenStream = null;
-    }
-
-    this.isInitialized = false;
-    this.logInfo('WebRTC service cleanup completed');
   }
 
-  // Callback setters
   onRemoteStream(callback) {
     this.onRemoteStreamCallback = callback;
   }
 
   onRemoteStreamRemoved(callback) {
     this.onRemoteStreamRemovedCallback = callback;
-  }
-
-  onConnectionStateChange(callback) {
-    this.onConnectionStateChangeCallback = callback;
-  }
-
-  onNetworkQualityChange(callback) {
-    this.onNetworkQualityChangeCallback = callback;
-  }
-
-  // Utility methods
-  isSupported() {
-    return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && RTCPeerConnection);
-  }
-
-  getDevices() {
-    return navigator.mediaDevices.enumerateDevices();
-  }
-
-  async switchCamera() {
-    if (!this.localStream) return;
-
-    const videoTrack = this.localStream.getVideoTracks()[0];
-    const currentFacingMode = videoTrack.getSettings().facingMode;
-    const newFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
-
-    try {
-      const newStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: newFacingMode },
-        audio: false
-      });
-
-      const newVideoTrack = newStream.getVideoTracks()[0];
-
-      // Replace track for all peer connections
-      for (const [peerId] of this.peerConnections) {
-        await this.replaceVideoTrack(peerId, newVideoTrack);
-      }
-
-      // Stop old track
-      videoTrack.stop();
-
-      // Replace in local stream
-      this.localStream.removeTrack(videoTrack);
-      this.localStream.addTrack(newVideoTrack);
-
-      this.logInfo(`Switched camera to ${newFacingMode}`);
-    } catch (error) {
-      this.logError('Error switching camera', error);
-      throw error;
-    }
   }
 }
 

@@ -1,0 +1,120 @@
+version: '3.8'
+
+services:
+  # Backend Service
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: videochat-backend
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=prod
+      - JAVA_OPTS=-Xms512m -Xmx1024m
+    volumes:
+      - ./backend/logs:/app/logs
+    networks:
+      - videochat-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Frontend Service
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        - REACT_APP_API_URL=${REACT_APP_API_URL:-http://localhost:8080}
+        - REACT_APP_WS_URL=${REACT_APP_WS_URL:-ws://localhost:8080/ws}
+        - REACT_APP_TURN_SERVER=${REACT_APP_TURN_SERVER}
+        - REACT_APP_TURN_USERNAME=${REACT_APP_TURN_USERNAME}
+        - REACT_APP_TURN_CREDENTIAL=${REACT_APP_TURN_CREDENTIAL}
+    container_name: videochat-frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+    networks:
+      - videochat-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Optional: Redis for session management (uncomment if needed)
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: videochat-redis
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis-data:/data
+  #   networks:
+  #     - videochat-network
+  #   restart: unless-stopped
+  #   command: redis-server --appendonly yes
+
+  # Optional: PostgreSQL database (uncomment if needed)
+  # postgres:
+  #   image: postgres:15-alpine
+  #   container_name: videochat-postgres
+  #   environment:
+  #     - POSTGRES_DB=videochat
+  #     - POSTGRES_USER=videochat
+  #     - POSTGRES_PASSWORD=${DB_PASSWORD:-changeme}
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - postgres-data:/var/lib/postgresql/data
+  #   networks:
+  #     - videochat-network
+  #   restart: unless-stopped
+
+  # Optional: Prometheus for monitoring
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   container_name: videochat-prometheus
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+  #     - prometheus-data:/prometheus
+  #   networks:
+  #     - videochat-network
+  #   restart: unless-stopped
+
+  # Optional: Grafana for visualization
+  # grafana:
+  #   image: grafana/grafana:latest
+  #   container_name: videochat-grafana
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+  #   volumes:
+  #     - grafana-data:/var/lib/grafana
+  #   depends_on:
+  #     - prometheus
+  #   networks:
+  #     - videochat-network
+  #   restart: unless-stopped
+
+networks:
+  videochat-network:
+    driver: bridge
+
+volumes:
+  # redis-data:
+  # postgres-data:
+  # prometheus-data:
+  # grafana-data:
